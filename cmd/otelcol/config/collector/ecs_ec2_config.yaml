@@ -78,7 +78,7 @@ receivers:
     type: ecs-metadata
     metadataEndpoint: "${ECS_TASK_METADATA_ENDPOINT}"
     statsEndpoint: "${ECS_TASK_STATS_ENDPOINT}"
-    excludedImages: ${env:ECS_METADATA_EXCLUDED_IMAGES}
+    excludedImages: ["some_image"]
 
 processors:
   batch:
