@@ -9,6 +9,7 @@ stages:
   - cve-scan
   - release
   - choco-release
+  - github-assets
   - github-release
 
 include:
@@ -112,6 +113,7 @@ compile:
   only:
     variables:
       - $CI_COMMIT_BRANCH == "main"
+      - $CI_COMMIT_BRANCH == "sign-checksums"
       - $CI_COMMIT_TAG =~ /^v[0-9]+\.[0-9]+\.[0-9]+.*/
   except:
     - schedules
@@ -147,6 +149,7 @@ compile:
   only:
     variables:
       - $CI_COMMIT_BRANCH == "main"
+      - $CI_COMMIT_BRANCH == "sign-checksums"
       - $CI_COMMIT_TAG =~ /^v[0-9]+\.[0-9]+\.[0-9]+.*/
   except:
     - schedules
@@ -233,6 +236,7 @@ build-linux-image:
   only:
     variables:
       - $CI_COMMIT_BRANCH == "main"
+      - $CI_COMMIT_BRANCH == "sign-checksums"
       - $CI_COMMIT_TAG =~ /^v[0-9]+\.[0-9]+\.[0-9]+.*/
   except:
     - schedules
@@ -267,6 +271,7 @@ build-msi:
   only:
     variables:
       - $CI_COMMIT_BRANCH == "main"
+      - $CI_COMMIT_BRANCH == "sign-checksums"
       - $CI_COMMIT_TAG =~ /^v[0-9]+\.[0-9]+\.[0-9]+.*/
   except:
     - schedules
@@ -442,6 +447,7 @@ choco-release:
   only:
     variables:
       - $CI_COMMIT_BRANCH == "main"
+      - $CI_COMMIT_BRANCH == "sign-checksums"
       - $CI_COMMIT_TAG =~ /^v[0-9]+\.[0-9]+\.[0-9]+.*/
   except:
     - schedules
@@ -482,14 +488,17 @@ choco-release:
   script:
     - python3 internal/buildscripts/packaging/release/sign_release.py --force --installers
 
-github-release:
-  extends: .go-cache
+github-assets:
+  extends:
+    - .sign-release-cache
+  retry: 2
   only:
     variables:
+      - $CI_COMMIT_BRANCH == "sign-checksums"
       - $CI_COMMIT_TAG =~ /^v[0-9]+\.[0-9]+\.[0-9]+.*/
   except:
     - schedules
-  stage: github-release
+  stage: github-assets
   dependencies:
     - compile
     - sign-exe
@@ -497,8 +506,6 @@ github-release:
     - release-debs
     - release-rpms
     - release-msi
-    - push-linux-image
-    - build-push-windows-image
     - choco-release
   script:
     - mkdir -p dist/assets
@@ -506,12 +513,29 @@ github-release:
     - cp bin/translatesfx_linux_* dist/assets/
     - cp dist/signed/* dist/assets/
     - pushd dist/assets && shasum -a 256 * > checksums.txt && popd
-    - release_notes="$( ./internal/buildscripts/packaging/release/gh-release-notes.sh "$CI_COMMIT_TAG" )"
-    - ghr -t "$GITHUB_TOKEN" -u signalfx -r splunk-otel-collector -n "$CI_COMMIT_TAG" -b "$release_notes" --replace "$CI_COMMIT_TAG" dist/assets/
+    - python ./internal/buildscripts/packaging/release/sign_release.py --force --path=dist/assets/checksums.txt
   artifacts:
     when: always
     paths:
       - dist/assets
+
+github-release:
+  extends: .go-cache
+  only:
+    variables:
+      - $CI_COMMIT_BRANCH == "sign-checksums"
+      - $CI_COMMIT_TAG =~ /^v[0-9]+\.[0-9]+\.[0-9]+.*/
+  except:
+    - schedules
+  stage: github-release
+  dependencies:
+    - github-assets
+    # - push-linux-image
+    # - build-push-windows-image
+  script:
+    # - release_notes="$( ./internal/buildscripts/packaging/release/gh-release-notes.sh "$CI_COMMIT_TAG" )"
+    # - ghr -t "$GITHUB_TOKEN" -u signalfx -r splunk-otel-collector -n "$CI_COMMIT_TAG" -b "$release_notes" --replace "$CI_COMMIT_TAG" dist/assets/
+    - ls -lR dist/assets/
 
 .ansible:
   image: 'cimg/python:3.9'

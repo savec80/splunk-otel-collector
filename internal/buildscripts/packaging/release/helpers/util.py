@@ -89,6 +89,8 @@ class Asset(object):
                 return "WIN"
             elif self.component == "osx":
                 return "OSX"
+            elif self.component == "txt":
+                return "GPG"
         return None
 
     def download(self, dest, user=None, token=None, overwrite=False):
@@ -522,6 +524,13 @@ def release_msi_to_s3(asset, args, **signing_args):
             print(f"Updating {S3_BUCKET}/{s3_latest_path} for version '{msi_version}' ...")
             upload_file_to_s3(latest_txt, s3_latest_path, force=True)
             invalidate_cloudfront([s3_path, s3_latest_path])
+
+
+def sign_txt(asset, args, **signing_args):
+    print(f"Signing {asset.name} (may take 10+ minutes):")
+    dest = os.path.abspath(asset.path) + ".asc"
+    if not asset.sign(dest=dest, timeout=args.timeout, overwrite=args.force, **signing_args):
+        sys.exit(1)
 
 
 def get_github_release(repo_name, tag=None, token=None):

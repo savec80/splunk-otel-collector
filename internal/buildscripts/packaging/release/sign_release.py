@@ -23,6 +23,7 @@ from helpers.util import (
     release_msi_to_s3,
     release_rpm_to_artifactory,
     sign_exe,
+    sign_txt,
 )
 
 
@@ -34,7 +35,7 @@ def main():
             signing_args[key] = val
 
     if asset:
-        if args.no_push:
+        if args.no_push or asset.component == "txt":
             print("Signing the following asset:")
         elif args.no_sign_msi and asset.component == "msi":
             print(f"Releasing the following asset to the '{args.stage}' stage:")
@@ -62,6 +63,9 @@ def main():
         elif asset.component == "osx":
             # Sign OSX executable
             sign_exe(asset, args, **signing_args)
+        elif asset.component == "txt":
+            # Sign text file
+            sign_txt(asset, args, **signing_args)
 
     # Release installer scripts to S3
     if args.installers and not args.no_push:
