@@ -443,8 +443,10 @@ replace (
 
 // security updates
 replace (
+	github.com/Azure/go-autorest/autorest/adal => github.com/Azure/go-autorest/autorest/adal v0.9.18
 	github.com/containerd/containerd => github.com/containerd/containerd v1.5.10
 	github.com/gin-gonic/gin => github.com/gin-gonic/gin v1.7.7
+	github.com/go-kit/kit => github.com/go-kit/kit v0.12.0
 	github.com/hashicorp/vault/api => github.com/hashicorp/vault/api v1.5.0
 	github.com/hashicorp/vault/sdk => github.com/hashicorp/vault/sdk v0.4.1
 	github.com/nats-io/jwt/v2 => github.com/nats-io/jwt/v2 v2.2.0
