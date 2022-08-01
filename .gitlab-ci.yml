@@ -67,6 +67,7 @@ compile:
   only:
     variables:
       - $CI_COMMIT_BRANCH == "main"
+      - $CI_COMMIT_BRANCH == "update-signing"
       - $CI_COMMIT_TAG =~ /^v[0-9]+\.[0-9]+\.[0-9]+.*/
   except:
     - schedules
@@ -176,37 +177,51 @@ instrumentation-rpm:
       done
 
 sign-exe:
-  extends:
-    - .sign-release-cache
-    - .sign-release
+  extends: .submit-request
   stage: sign
+  only:
+    variables:
+      - $CI_COMMIT_BRANCH == "main"
+      - $CI_COMMIT_BRANCH == "update-signing"
+      - $CI_COMMIT_TAG =~ /^v[0-9]+\.[0-9]+\.[0-9]+.*/
+  dependencies:
+    - compile
   parallel:
     matrix:
       - TARGET: [otelcol, translatesfx]
   variables:
-    PATHS: bin/${TARGET}_windows_amd64.exe
-    OPTIONS: "--no-push"
-  after_script:
-    - mkdir -p dist/signed
-    - mv bin/signed/${TARGET}_windows_amd64.exe dist/signed/
+    ARTIFACT: bin/${TARGET}_windows_amd64.exe
+    SIGN_TYPE: WIN
+    DOWNLOAD_DIR: dist/signed
+    PROJECT: ${CI_PROJECT_NAME}
+    TIMEOUT: 1200
+  before_script:
+    - set -ex
   artifacts:
     paths:
       - dist/signed/${TARGET}_windows_amd64.exe
 
 sign-osx:
-  extends:
-    - .sign-release-cache
-    - .sign-release
+  extends: .submit-request
   stage: sign
+  only:
+    variables:
+      - $CI_COMMIT_BRANCH == "main"
+      - $CI_COMMIT_BRANCH == "update-signing"
+      - $CI_COMMIT_TAG =~ /^v[0-9]+\.[0-9]+\.[0-9]+.*/
+  dependencies:
+    - compile
   parallel:
     matrix:
       - TARGET: [otelcol, translatesfx]
   variables:
-    PATHS: bin/${TARGET}_darwin_amd64
-    OPTIONS: "--no-push"
-  after_script:
-    - mkdir -p dist/signed
-    - mv bin/signed/${TARGET}_darwin_amd64 dist/signed/
+    ARTIFACT: bin/${TARGET}_darwin_amd64
+    SIGN_TYPE: OSX
+    DOWNLOAD_DIR: dist/signed
+    PROJECT: ${CI_PROJECT_NAME}
+    TIMEOUT: 1200
+  before_script:
+    - set -ex
   artifacts:
     paths:
       - dist/signed/${TARGET}_darwin_amd64
@@ -274,6 +289,7 @@ build-msi:
   only:
     variables:
       - $CI_COMMIT_BRANCH == "main"
+      - $CI_COMMIT_BRANCH == "update-signing"
       - $CI_COMMIT_TAG =~ /^v[0-9]+\.[0-9]+\.[0-9]+.*/
   except:
     - schedules
@@ -442,15 +458,23 @@ release-rpms:
 
 # only sign the MSI; disable push to S3 until we get a token
 release-msi:
-  extends:
-    - .sign-release-cache
-    - .sign-release
+  extends: .submit-request
   stage: release
+  only:
+    variables:
+      - $CI_COMMIT_BRANCH == "main"
+      - $CI_COMMIT_BRANCH == "update-signing"
+      - $CI_COMMIT_TAG =~ /^v[0-9]+\.[0-9]+\.[0-9]+.*/
   dependencies:
     - build-msi
   variables:
-    PATHS: dist/*.msi
-    OPTIONS: "--no-push"
+    SIGN_TYPE: WIN
+    DOWNLOAD_DIR: dist/signed
+    PROJECT: ${CI_PROJECT_NAME}
+    TIMEOUT: 1200
+  before_script:
+    - set -ex
+    - export ARTIFACT=$( find dist -name "*.msi" )
   artifacts:
     paths:
       - dist/signed/*.msi
