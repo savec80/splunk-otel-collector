@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"path"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -108,6 +109,7 @@ func TestValidConfig(t *testing.T) {
 		ReceiverSettings:    config.NewReceiverSettings(config.NewComponentID("discovery")),
 		LogEndpoints:        true,
 		EmbedReceiverConfig: true,
+		CorrelationTTL:      25 * time.Second,
 		WatchObservers: []config.ComponentID{
 			config.NewComponentID("an_observer"),
 			config.NewComponentIDWithName("another_observer", "with_name"),

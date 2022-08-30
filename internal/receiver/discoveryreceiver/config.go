@@ -15,10 +15,21 @@
 package discoveryreceiver
 
 import (
+	"encoding/base64"
 	"fmt"
+	"regexp"
+	"time"
 
+	"github.com/open-telemetry/opentelemetry-collector-contrib/receiver/receivercreator"
+	"go.opentelemetry.io/collector/component"
 	"go.opentelemetry.io/collector/config"
+	"go.opentelemetry.io/collector/confmap"
 	"go.uber.org/multierr"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
+	"gopkg.in/yaml.v2"
+
+	"github.com/signalfx/splunk-otel-collector/internal/receiver/discoveryreceiver/statussources"
 )
 
 var (
@@ -53,6 +64,8 @@ type Config struct {
 	// Warning: these values will include the literal receiver subconfig from the parent Collector config.
 	// The feature provides no secret redaction and its output is easily decodable into plaintext.
 	EmbedReceiverConfig bool `mapstructure:"embed_receiver_config"`
+	// The duration to maintain "removed" endpoints since their last updated timestamp.
+	CorrelationTTL time.Duration `mapstructure:"correlation_ttl"`
 }
 
 // ReceiverEntry is a definition for a receiver instance to instantiate for each Endpoint matching
@@ -92,8 +105,17 @@ type LogRecord struct {
 func (cfg *Config) Validate() error {
 	var err error
 	for rName, rEntry := range cfg.Receivers {
+		// These check reserved separators used by the Receiver Creator by which we
+		// obtain receiver config.ComponentID and observer.EndpointID. If they are used
+		// directly in config we won't be able to determine the ids.
+		name := rName.String()
+		for _, re := range []*regexp.Regexp{statussources.ReceiverCreatorRegexp, statussources.EndpointTargetRegexp} {
+			if re.MatchString(name) {
+				err = multierr.Combine(err, fmt.Errorf("receiver %q validation failure: receiver name cannot contain %q", name, re.String()))
+			}
+		}
 		if e := rEntry.validate(); e != nil {
-			err = multierr.Combine(err, fmt.Errorf("receiver %q validation failure: %w", rName, e))
+			err = multierr.Combine(err, fmt.Errorf("receiver %q validation failure: %w", name, e))
 		}
 	}
 
@@ -159,4 +181,89 @@ func (s *Status) validate() error {
 func (lr *LogRecord) validate() error {
 	// TODO: supported severity text validation
 	return nil
+}
+
+func (cfg *Config) receiverCreatorFactoryAndConfig(logger *zap.Logger, correlationStore *correlationStore) (component.ReceiverFactory, config.Receiver, error) {
+	receiverCreatorFactory := receivercreator.NewFactory()
+	receiverCreatorDefaultConfig := receiverCreatorFactory.CreateDefaultConfig()
+	receiverCreatorConfig, ok := receiverCreatorDefaultConfig.(*receivercreator.Config)
+	if !ok {
+		return nil, nil, fmt.Errorf("failed to coerce to receivercreator.Config")
+	}
+	receiverCreatorConfig.SetIDName(cfg.ID().String())
+	receiverCreatorConfig.WatchObservers = cfg.WatchObservers
+
+	receiversConfig := map[string]any{}
+	for receiverID, rEntry := range cfg.Receivers {
+		resourceAttributes := map[string]string{}
+		for k, v := range rEntry.ResourceAttributes {
+			resourceAttributes[k] = v
+		}
+		resourceAttributes[statussources.ReceiverNameAttr] = receiverID.Name()
+		resourceAttributes[statussources.ReceiverTypeAttr] = string(receiverID.Type())
+		resourceAttributes[receiverRuleAttr] = rEntry.Rule
+		resourceAttributes[statussources.EndpointIDAttr] = "`id`"
+
+		if cfg.EmbedReceiverConfig {
+			embeddedConfig := map[string]any{}
+			embeddedReceiversConfig := map[string]any{}
+			receiverConfig := map[string]any{}
+			receiverConfig["rule"] = rEntry.Rule
+			receiverConfig["config"] = rEntry.Config
+			receiverConfig["resource_attributes"] = rEntry.ResourceAttributes
+			embeddedReceiversConfig[receiverID.String()] = receiverConfig
+			embeddedConfig["receivers"] = embeddedReceiversConfig
+
+			// we don't embed the `watch_observers` array here since it is added
+			// on statement or metric evaluator matches by looking up the
+			// Endpoint.ID to the originating observer ComponentID
+			var configYaml []byte
+			var err error
+			if configYaml, err = yaml.Marshal(embeddedConfig); err != nil {
+				return nil, nil, fmt.Errorf("failed embedding %q receiver config: %w", receiverID.String(), err)
+			}
+			encoded := base64.StdEncoding.EncodeToString(configYaml)
+			resourceAttributes[receiverConfigAttr] = encoded
+			correlationStore.UpdateAttrs(receiverID, map[string]string{receiverConfigAttr: encoded})
+		}
+
+		rEntryMap := map[string]any{}
+		rEntryMap["rule"] = rEntry.Rule
+		rEntryMap["config"] = rEntry.Config
+		rEntryMap["resource_attributes"] = resourceAttributes
+		receiversConfig[receiverID.String()] = rEntryMap
+	}
+
+	if ce := logger.Check(zapcore.DebugLevel, "embedded receiver creator receiverTemplates"); ce != nil {
+		if c, err := yaml.Marshal(receiversConfig); err == nil {
+			ce.Write(zap.ByteString("receivers", c))
+		} else {
+			ce.Write(zap.String("failed marshaling", err.Error()))
+		}
+	}
+
+	receiverTemplates := confmap.NewFromStringMap(map[string]any{"receivers": receiversConfig})
+	if err := receiverCreatorConfig.Unmarshal(receiverTemplates); err != nil {
+		return nil, nil, fmt.Errorf("failed unmarshaling discoveryreceiver receiverTemplates into receiver_creator config: %w", err)
+	}
+
+	return receiverCreatorFactory, receiverCreatorConfig, nil
+}
+
+func addObserverToEncodedConfig(encoded string, observerID config.ComponentID) (string, error) {
+	cfg := map[string]any{}
+	dBytes, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil {
+		return "", err
+	}
+	if err = yaml.Unmarshal(dBytes, &cfg); err != nil {
+		return "", err
+	}
+	cfg["watch_observers"] = []string{observerID.String()}
+
+	var cfgYaml []byte
+	if cfgYaml, err = yaml.Marshal(cfg); err != nil {
+		return "", fmt.Errorf("failed embedding receiver config to include %q: %w", observerID.String(), err)
+	}
+	return base64.StdEncoding.EncodeToString(cfgYaml), nil
 }

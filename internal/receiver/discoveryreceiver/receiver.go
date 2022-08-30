@@ -22,16 +22,24 @@ import (
 	"github.com/open-telemetry/opentelemetry-collector-contrib/extension/observer"
 	"go.opentelemetry.io/collector/component"
 	"go.opentelemetry.io/collector/config"
+	"go.opentelemetry.io/collector/config/configtelemetry"
 	"go.opentelemetry.io/collector/consumer"
 	"go.opentelemetry.io/collector/obsreport"
 	"go.opentelemetry.io/collector/pdata/plog"
+	"go.opentelemetry.io/otel/metric"
+	"go.opentelemetry.io/otel/trace"
 	"go.uber.org/zap"
 )
 
 const (
-	eventTypeAttr    = "discovery.event.type"
-	observerNameAttr = "discovery.observer.name"
-	observerTypeAttr = "discovery.observer.type"
+	eventTypeAttr             = "discovery.event.type"
+	metricNameAttr            = "metric.name"
+	observerNameAttr          = "discovery.observer.name"
+	observerTypeAttr          = "discovery.observer.type"
+	receiverConfigAttr        = "discovery.receiver.config"
+	receiverUpdatedConfigAttr = "discovery.receiver.updated.config"
+	receiverRuleAttr          = "discovery.receiver.rule"
+	statusAttr                = "discovery.status"
 )
 
 var (
@@ -39,16 +47,20 @@ var (
 )
 
 type discoveryReceiver struct {
-	logsConsumer      consumer.Logs
-	endpointTracker   *endpointTracker
-	sentinel          chan struct{}
-	logger            *zap.Logger
-	config            *Config
-	obsreportReceiver *obsreport.Receiver
-	pLogs             chan plog.Logs
-	observables       map[config.ComponentID]observer.Observable
-	loopFinished      *sync.WaitGroup
-	settings          component.ReceiverCreateSettings
+	logsConsumer       consumer.Logs
+	receiverCreator    component.MetricsReceiver
+	alreadyLogged      *sync.Map
+	endpointTracker    *endpointTracker
+	sentinel           chan struct{}
+	metricEvaluator    *metricEvaluator
+	statementEvaluator *statementEvaluator
+	logger             *zap.Logger
+	config             *Config
+	obsreportReceiver  *obsreport.Receiver
+	pLogs              chan plog.Logs
+	observables        map[config.ComponentID]observer.Observable
+	loopFinished       *sync.WaitGroup
+	settings           component.ReceiverCreateSettings
 }
 
 func newDiscoveryReceiver(
@@ -63,12 +75,13 @@ func newDiscoveryReceiver(
 			Transport:              "none",
 			ReceiverCreateSettings: settings,
 		}),
-		logger:       settings.TelemetrySettings.Logger,
-		settings:     settings,
-		logsConsumer: consumer,
-		pLogs:        make(chan plog.Logs),
-		sentinel:     make(chan struct{}, 1),
-		loopFinished: &sync.WaitGroup{},
+		logger:        settings.TelemetrySettings.Logger,
+		settings:      settings,
+		logsConsumer:  consumer,
+		pLogs:         make(chan plog.Logs),
+		sentinel:      make(chan struct{}, 1),
+		loopFinished:  &sync.WaitGroup{},
+		alreadyLogged: &sync.Map{},
 	}
 
 	return d
@@ -82,6 +95,16 @@ func (d *discoveryReceiver) Start(ctx context.Context, host component.Host) (err
 	d.endpointTracker = newEndpointTracker(d.observables, d.config, d.logger, d.pLogs)
 	d.endpointTracker.start()
 
+	d.metricEvaluator = newMetricEvaluator(d.logger, d.config, d.pLogs, d.endpointTracker.correlations)
+
+	if d.statementEvaluator, err = newStatementEvaluator(d.logger, d.config, d.pLogs, d.endpointTracker.correlations); err != nil {
+		return fmt.Errorf("failed creating statement evaluator: %w", err)
+	}
+
+	if err = d.createAndSetReceiverCreator(); err != nil {
+		return fmt.Errorf("failed creating internal receiver_creator: %w", err)
+	}
+
 	loopStarted := &sync.WaitGroup{}
 	loopStarted.Add(1)
 	d.loopFinished.Add(1)
@@ -91,13 +114,23 @@ func (d *discoveryReceiver) Start(ctx context.Context, host component.Host) (err
 	d.logger.Debug("log consumer initializing")
 	loopStarted.Wait()
 	d.logger.Debug("successfully initialized")
+
+	d.logger.Debug("starting internal receiver_creator")
+	if err = d.receiverCreator.Start(ctx, host); err != nil {
+		return fmt.Errorf("failed starting internal receiver_creator: %w", err)
+	}
+	d.logger.Debug("started receiver_creator receiver")
 	return
 }
 
 func (d *discoveryReceiver) Shutdown(ctx context.Context) error {
 	d.endpointTracker.stop()
+	d.logger.Debug("Shutting down receiverCreator", zap.Error(d.receiverCreator.Shutdown(ctx)))
+	d.logger.Debug("Shutting down discoveryreceiver")
 	d.sentinel <- struct{}{}
+	d.logger.Debug("passed to sentinel")
 	d.loopFinished.Wait()
+	d.logger.Debug("finished waiting for WG. tearing down")
 	close(d.sentinel)
 	close(d.pLogs)
 	d.logger.Debug("finished shutdown")
@@ -124,6 +157,34 @@ func (d *discoveryReceiver) consumerLoop(loopStarted *sync.WaitGroup) {
 			d.obsreportReceiver.EndLogsOp(ctx, typeStr, pLog.LogRecordCount(), err)
 		}
 	}
+}
+
+func (d *discoveryReceiver) createAndSetReceiverCreator() error {
+	receiverCreatorFactory, receiverCreatorConfig, err := d.config.receiverCreatorFactoryAndConfig(d.logger, d.endpointTracker.correlations)
+	if err != nil {
+		return nil
+	}
+	receiverCreatorSettings := component.ReceiverCreateSettings{
+		TelemetrySettings: component.TelemetrySettings{
+			Logger: d.statementEvaluator.evaluatedLogger.With(
+				zap.String("kind", "receiver"),
+				zap.String("name", receiverCreatorConfig.ID().String()),
+			),
+			TracerProvider: trace.NewNoopTracerProvider(),
+			MeterProvider:  metric.NewNoopMeterProvider(),
+			MetricsLevel:   configtelemetry.LevelDetailed,
+		},
+		BuildInfo: component.BuildInfo{
+			Command: "discovery",
+			Version: "latest",
+		},
+	}
+	if d.receiverCreator, err = receiverCreatorFactory.CreateMetricsReceiver(
+		context.Background(), receiverCreatorSettings, receiverCreatorConfig, d.metricEvaluator,
+	); err != nil {
+		return err
+	}
+	return nil
 }
 
 // observablesFromHost finds configured `watch_observers` extension instances from the host
