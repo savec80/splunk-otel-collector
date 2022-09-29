@@ -134,18 +134,45 @@ func TestResourceEquivalence(t *testing.T) {
 		}}
 	}
 	rOne := resource()
-	assert.True(t, rOne.Equals(rOne))
+	assert.True(t, rOne.Matches(rOne))
 
 	rTwo := resource()
-	assert.True(t, rOne.Equals(rTwo))
-	assert.True(t, rTwo.Equals(rOne))
+	assert.True(t, rOne.Matches(rTwo))
+	assert.True(t, rTwo.Matches(rOne))
 
 	rTwo.Attributes["five"].(map[string]any)["another"] = "item"
-	assert.False(t, rOne.Equals(rTwo))
-	assert.False(t, rTwo.Equals(rOne))
+	assert.False(t, rOne.Matches(rTwo))
+	assert.False(t, rTwo.Matches(rOne))
 	rOne.Attributes["five"].(map[string]any)["another"] = "item"
-	assert.True(t, rOne.Equals(rTwo))
-	assert.True(t, rTwo.Equals(rOne))
+	assert.True(t, rOne.Matches(rTwo))
+	assert.True(t, rTwo.Matches(rOne))
+}
+
+func TestResourceMatchesWithAny(t *testing.T) {
+	rReference := Resource{Attributes: map[string]any{
+		"one": 1, "two": "<ANY>", "three": nil,
+		"four": []int{1, 2, 3, 4},
+		"five": map[string]any{
+			"true": true, "false": false, "nil": nil,
+		},
+	}}
+	rShouldEqual := Resource{Attributes: map[string]any{
+		"one": 1, "two": "two", "three": nil,
+		"four": []int{1, 2, 3, 4},
+		"five": map[string]any{
+			"true": true, "false": false, "nil": nil,
+		},
+	}}
+	rMissingTwo := Resource{Attributes: map[string]any{
+		"one": 1, "three": nil,
+		"four": []int{1, 2, 3, 4},
+		"five": map[string]any{
+			"true": true, "false": false, "nil": nil,
+		},
+	}}
+
+	assert.True(t, rReference.Matches(rShouldEqual))
+	assert.False(t, rReference.Matches(rMissingTwo))
 }
 
 func TestInstrumentationLibraryEquivalence(t *testing.T) {
@@ -156,25 +183,32 @@ func TestInstrumentationLibraryEquivalence(t *testing.T) {
 	}
 
 	ilOne := il()
-	assert.True(t, ilOne.Equals(ilOne))
+	assert.True(t, ilOne.Equals(ilOne, true))
 
 	ilTwo := il()
-	assert.True(t, ilOne.Equals(ilTwo))
-	assert.True(t, ilTwo.Equals(ilOne))
+	assert.True(t, ilOne.Equals(ilTwo, true))
+	assert.True(t, ilTwo.Equals(ilOne, true))
+	assert.True(t, ilOne.Equals(ilTwo, false))
 
 	ilTwo.Version = ""
-	assert.False(t, ilOne.Equals(ilTwo))
-	assert.False(t, ilTwo.Equals(ilOne))
+	assert.False(t, ilOne.Equals(ilTwo, true))
+	assert.False(t, ilTwo.Equals(ilOne, true))
+	assert.False(t, ilOne.Equals(ilTwo, false))
+	assert.True(t, ilTwo.Equals(ilOne, false))
 	ilOne.Version = ""
-	assert.True(t, ilOne.Equals(ilTwo))
-	assert.True(t, ilTwo.Equals(ilOne))
+	assert.True(t, ilOne.Equals(ilTwo, true))
+	assert.True(t, ilTwo.Equals(ilOne, true))
+	assert.True(t, ilOne.Equals(ilTwo, false))
 
 	ilTwo.Name = ""
-	assert.False(t, ilOne.Equals(ilTwo))
-	assert.False(t, ilTwo.Equals(ilOne))
+	assert.False(t, ilOne.Equals(ilTwo, true))
+	assert.False(t, ilTwo.Equals(ilOne, true))
+	assert.False(t, ilOne.Equals(ilTwo, false))
+	assert.True(t, ilTwo.Equals(ilOne, false))
 	ilOne.Name = ""
-	assert.True(t, ilOne.Equals(ilTwo))
-	assert.True(t, ilTwo.Equals(ilOne))
+	assert.True(t, ilOne.Equals(ilTwo, true))
+	assert.True(t, ilTwo.Equals(ilOne, true))
+	assert.True(t, ilTwo.Equals(ilOne, false))
 }
 
 func TestMetricEquivalence(t *testing.T) {

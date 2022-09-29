@@ -45,7 +45,10 @@ const (
 	IntNonmonotonicUnspecifiedSum    MetricType = "IntNonmonotonicUnspecifiedSum"
 )
 
-const buildVersionPlaceholder = "<FROM_BUILD>"
+const (
+	buildVersionPlaceholder = "<FROM_BUILD>"
+	anyValue                = "<ANY>"
+)
 
 var supporedtMetricTypeOptions = fmt.Sprintf(
 	"%s, %s, %s, %s, %s, %s,%s, %s, %s, %s, %s, %s, %s, %s",
@@ -170,15 +173,30 @@ func (resource Resource) String() string {
 	return string(out)
 }
 
-// Provides an md5 hash determined by Resource content.
+// Hash provides a md5 hash determined by Resource content.
 func (resource Resource) Hash() string {
 	return fmt.Sprintf("%x", md5.Sum([]byte(resource.String())))
 }
 
-// Determines the equivalence of two Resource items by their Attributes.
-// TODO: ensure that Resource.Hash equivalence is valid given all possible Attribute values.
-func (resource Resource) Equals(toCompare Resource) bool {
-	return reflect.DeepEqual(resource.Attributes, toCompare.Attributes)
+// Matches determines the equivalence of two Resource items by their Attributes.
+func (resource Resource) Matches(toCompare Resource) bool {
+	if len(resource.Attributes) != len(toCompare.Attributes) {
+		return false
+	}
+	for k, v := range resource.Attributes {
+		toCompareV, ok := toCompare.Attributes[k]
+		if !ok {
+			return false
+		}
+		if v == anyValue {
+			continue
+		}
+		if !reflect.DeepEqual(v, toCompareV) {
+			return false
+		}
+
+	}
+	return true
 }
 
 func (instrumentationLibrary InstrumentationLibrary) String() string {
@@ -189,15 +207,20 @@ func (instrumentationLibrary InstrumentationLibrary) String() string {
 	return string(out)
 }
 
-// Provides an md5 hash determined by InstrumentationLibrary fields.
+// Hash provides a md5 hash determined by InstrumentationLibrary fields.
 func (instrumentationLibrary InstrumentationLibrary) Hash() string {
 	return fmt.Sprintf("%x", md5.Sum([]byte(instrumentationLibrary.String())))
 }
 
-// Determines the equivalence of two InstrumentationLibrary items.
-// TODO: ensure that Resource.Hash equivalence is valid given all possible Attribute values.
-func (instrumentationLibrary InstrumentationLibrary) Equals(toCompare InstrumentationLibrary) bool {
-	return instrumentationLibrary.Name == toCompare.Name && instrumentationLibrary.Version == toCompare.Version
+// Equals determines the equivalence of two InstrumentationLibrary items.
+func (instrumentationLibrary InstrumentationLibrary) Equals(toCompare InstrumentationLibrary, strict bool) bool {
+	if instrumentationLibrary.Name != toCompare.Name && (strict || instrumentationLibrary.Name != "") {
+		return false
+	}
+	if instrumentationLibrary.Version != toCompare.Version && (strict || instrumentationLibrary.Version != "") {
+		return false
+	}
+	return true
 }
 
 func (metric Metric) String() string {
@@ -348,12 +371,12 @@ func (received ResourceMetrics) ContainsAll(expected ResourceMetrics) (bool, err
 	for _, expectedResourceMetric := range expected.ResourceMetrics {
 		resourceMatched := false
 		for _, resourceMetric := range received.ResourceMetrics {
-			if resourceMetric.Resource.Equals(expectedResourceMetric.Resource) {
+			if expectedResourceMetric.Resource.Matches(resourceMetric.Resource) {
 				resourceMatched = true
 				for _, expectedILM := range expectedResourceMetric.ILMs {
 					instrumentationLibraryMatched := false
 					for _, ilm := range resourceMetric.ILMs {
-						if ilm.InstrumentationLibrary.Equals(expectedILM.InstrumentationLibrary) {
+						if expectedILM.InstrumentationLibrary.Equals(ilm.InstrumentationLibrary, false) {
 							instrumentationLibraryMatched = true
 							for _, expectedMetric := range expectedILM.Metrics {
 								metricFound := false
