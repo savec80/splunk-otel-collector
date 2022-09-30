@@ -161,6 +161,7 @@ func TestAssertAllMetricsReceivedHappyPath(t *testing.T) {
 	require.NoError(t, err)
 
 	resourceMetrics, err := PDataToResourceMetrics(metrics)
+	resourceMetrics = FlattenResourceMetrics(resourceMetrics)
 	require.NoError(t, err)
 	otlp.AssertAllMetricsReceived(t, resourceMetrics, 100*time.Millisecond)
 }

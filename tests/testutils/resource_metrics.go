@@ -363,7 +363,7 @@ func FlattenResourceMetrics(resourceMetrics ...ResourceMetrics) ResourceMetrics 
 // Metric equivalence is based on RelaxedEquals() check: fields not in expected (e.g. unit, type, value, etc.)
 // are not compared to received, but all labels must match.
 // For better reliability, it's advised that both ResourceMetrics items have been flattened by FlattenResourceMetrics.
-func (received ResourceMetrics) ContainsAll(expected ResourceMetrics) (bool, error) {
+func (received ResourceMetrics) ContainsAll(expected ResourceMetrics, strictInstrumentationLibraryMatch bool) (bool, error) {
 	var missingResources []string
 	var missingInstrumentationLibraries []string
 	var missingMetrics []string
@@ -376,7 +376,7 @@ func (received ResourceMetrics) ContainsAll(expected ResourceMetrics) (bool, err
 				for _, expectedILM := range expectedResourceMetric.ILMs {
 					instrumentationLibraryMatched := false
 					for _, ilm := range resourceMetric.ILMs {
-						if expectedILM.InstrumentationLibrary.Equals(ilm.InstrumentationLibrary, false) {
+						if expectedILM.InstrumentationLibrary.Equals(ilm.InstrumentationLibrary, strictInstrumentationLibraryMatch) {
 							instrumentationLibraryMatched = true
 							for _, expectedMetric := range expectedILM.Metrics {
 								metricFound := false
